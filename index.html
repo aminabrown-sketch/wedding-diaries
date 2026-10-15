@@ -96,7 +96,36 @@ async function sendMagicLink(){
   authStatus.textContent='Royal Entrance could not send: '+(e instanceof Error?e.message:'Network request failed')+'.';
  }finally{loginBtn.disabled=false}
 }
-function consumeAuthHash(){const raw=location.hash.slice(1);if(!raw.includes('access_token='))return false;const p=new URLSearchParams(raw),token=p.get('access_token'),refresh=p.get('refresh_token'),expires=Number(p.get('expires_in')||3600),type=p.get('token_type')||'bearer';if(token){saveSession({access_token:token,refresh_token:refresh,expires_in:expires,token_type:type,expires_at:Math.floor(Date.now()/1000)+expires});history.replaceState(null,'',location.pathname+location.search+'#journey');return true}return false}
+async function consumeAuthCallback(){
+ const fragment=new URLSearchParams(location.hash.slice(1));
+ const query=new URLSearchParams(location.search);
+ const params=fragment.has('access_token')||fragment.has('error')?fragment:query;
+ const error=params.get('error_description')||params.get('error');
+ if(error){authStatus.textContent='Royal Entrance link could not be verified: '+error;history.replaceState(null,'',location.pathname+'#journey');return}
+ const token=params.get('access_token'),refresh=params.get('refresh_token');
+ if(token){
+  const expires=Number(params.get('expires_in')||3600);
+  saveSession({access_token:token,refresh_token:refresh,expires_in:expires,token_type:params.get('token_type')||'bearer',expires_at:Math.floor(Date.now()/1000)+expires});
+  history.replaceState(null,'',location.pathname+'#journey');
+  return;
+ }
+ const tokenHash=params.get('token_hash'),type=params.get('type');
+ if(tokenHash&&type){
+  try{
+   authStatus.textContent='Verifying your Royal Entrance…';
+   const r=await fetch(SUPABASE_URL+'/auth/v1/verify',{method:'POST',headers:headers(),body:JSON.stringify({token_hash:tokenHash,type})});
+   const data=await r.json();
+   if(!r.ok||!data.access_token)throw Error(data.msg||data.message||'Verification failed');
+   saveSession({...data,expires_at:Math.floor(Date.now()/1000)+Number(data.expires_in||3600)});
+   history.replaceState(null,'',location.pathname+'#journey');
+  }catch(e){authStatus.textContent='Royal Entrance verification failed. Request a new link and try again.';}
+  return;
+ }
+ if(params.has('code')){
+  authStatus.textContent='This sign-in link uses a code that requires a PKCE login flow. Please contact the MOH to update the login configuration.';
+  history.replaceState(null,'',location.pathname+'#journey');
+ }
+}
 loginBtn.addEventListener('click',sendMagicLink);emailInput.addEventListener('keydown',e=>{if(e.key==='Enter')sendMagicLink()});logoutBtn.addEventListener('click',()=>{clearSession();authStatus.textContent='You have left the Palace.';resetJourney()});
-consumeAuthHash();try{const stored=JSON.parse(localStorage.getItem('wedding_diaries_session')||'null');if(stored?.access_token&&(!stored.expires_at||stored.expires_at>Date.now()/1000)){accessToken=stored.access_token;currentUser=stored.user||null}}catch{clearSession()}loadJourney();
+(async()=>{await consumeAuthCallback();try{const stored=JSON.parse(localStorage.getItem('wedding_diaries_session')||'null');if(stored?.access_token&&(!stored.expires_at||stored.expires_at>Date.now()/1000)){accessToken=stored.access_token;currentUser=stored.user||null}}catch{clearSession()}await loadJourney()})();
 </script></body></html>
